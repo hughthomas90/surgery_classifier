@@ -296,11 +296,14 @@ if run_btn:
                 title = p.get('display_name', 'No Title')
                 cls, score, reason = classify_paper(title)
                 
-                # Get Source Name safely
-                source_name = p.get('primary_location', {}).get('source', {}).get('display_name', 'Unknown')
+                # Get Source Name safely (Handle NoneType at any level)
+                primary_loc = p.get('primary_location') or {}
+                source = primary_loc.get('source') or {}
+                source_name = source.get('display_name', 'Unknown')
                 
-                # Get Topic safely
-                topic = p.get('primary_topic', {}).get('display_name', 'Uncategorized')
+                # Get Topic safely (Handle NoneType if primary_topic is null)
+                primary_topic = p.get('primary_topic') or {}
+                topic = primary_topic.get('display_name', 'Uncategorized')
                 
                 processed_data.append({
                     "Title": title,
@@ -335,14 +338,15 @@ if run_btn:
             
             with c1:
                 st.markdown("##### Surgical vs Non-Surgical by Journal")
-                chart_data = df.groupby(['Journal', 'Classification']).size().reset_index(name='Count')
-                bar_chart = alt.Chart(chart_data).mark_bar().encode(
-                    x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
-                    y='Count',
-                    color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
-                    tooltip=['Journal', 'Classification', 'Count']
-                ).properties(height=300)
-                st.altair_chart(bar_chart, use_container_width=True)
+                if not df.empty:
+                    chart_data = df.groupby(['Journal', 'Classification']).size().reset_index(name='Count')
+                    bar_chart = alt.Chart(chart_data).mark_bar().encode(
+                        x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
+                        y='Count',
+                        color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
+                        tooltip=['Journal', 'Classification', 'Count']
+                    ).properties(height=300)
+                    st.altair_chart(bar_chart, use_container_width=True)
                 
             with c2:
                 st.markdown("##### Top Topics in Surgical Papers")
@@ -365,7 +369,7 @@ if run_btn:
             st.divider()
             st.subheader("📑 Detailed Results")
             
-            tab_all, tab_surg, tab_non = st.tabs(["All Papers", "Surgical Only", "Non-Surgical"])
+            tab_all, tab_surg, tab_non = st.tabs(["All Papers", "✅ Surgical Only", "❌ Non-Surgical"])
             
             with tab_all:
                 st.dataframe(df, use_container_width=True)

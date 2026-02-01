@@ -7,7 +7,7 @@ import altair as alt
 from datetime import datetime
 
 # ==========================================
-# 1. CLASSIFIER LOGIC (REFINED)
+# 1. CLASSIFIER LOGIC
 # ==========================================
 
 def classify_paper(title):
@@ -19,7 +19,7 @@ def classify_paper(title):
 
     title_lower = title.lower()
 
-    # --- A. NEGATIVE CONTEXT (The "Medical" Trap) ---
+    # --- A. NEGATIVE CONTEXT ---
     medical_context_pattern = r'\b(stem cell|bone marrow|hematopoietic|fecal|fmt|microbiota|mitochondria|corneal|renal replacement)\b'
     has_medical_context = re.search(medical_context_pattern, title_lower)
 
@@ -167,7 +167,6 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
         f"publication_year:{start_year}-{end_year}",
         "type:article|review"
     ]
-    # ADDED: fwci and cited_by_count to select
     params = {
         "filter": ",".join(filters),
         "per-page": 200,
@@ -196,7 +195,6 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
             # Update UI
             current_count = len(all_papers)
             status_text.text(f"Fetched {current_count} papers...")
-            # Progress calculation: capped at 1.0 (100%)
             progress = min(current_count / max_limit, 1.0)
             progress_bar.progress(progress)
 
@@ -221,7 +219,7 @@ st.set_page_config(page_title="Surgical Impact Analyzer", layout="wide")
 
 st.title("🏥 Surgical Impact Analyzer")
 st.markdown("""
-**Goal:** Retrieve papers, isolate surgical content, and analyze **citation impact (FWCI)**.
+**Goal:** Retrieve papers, isolate surgical content, and analyze **citation impact (FWCI)** and **output proportions**.
 """)
 
 # --- STATE MANAGEMENT ---
@@ -258,14 +256,12 @@ with st.sidebar:
                 st.session_state.total_count = 0
                 st.error("No journals found.")
 
-    # Show results of check
     if st.session_state.journal_names:
         st.info(f"Matched: {len(st.session_state.journal_names)} journals")
         st.success(f"Available Papers: {st.session_state.total_count:,}")
     
     st.divider()
     
-    # FETCH SETTINGS
     default_limit = min(st.session_state.total_count, 1000) if st.session_state.total_count > 0 else 500
     
     max_papers = st.number_input(
@@ -285,7 +281,6 @@ if run_btn:
     else:
         st.write(f"### Fetching from: {', '.join(st.session_state.journal_names)}")
         
-        # FETCH
         raw_papers = fetch_papers_from_sources(
             st.session_state.source_ids, 
             years[0], 
@@ -318,134 +313,116 @@ if run_btn:
                     "Topic": topic,
                     "DOI": p.get('doi'),
                     "OpenAlex ID": p.get('id'),
-                    "FWCI": p.get('fwci', 0), # Field Weighted Citation Impact
+                    "FWCI": p.get('fwci', 0), 
                     "Citations": p.get('cited_by_count', 0)
                 })
             
             df = pd.DataFrame(processed_data)
             
-            # --- DASHBOARD LOGIC ---
+            # --- AGGREGATION LOGIC FOR METRICS ---
+            
+            # 1. Journal Total Counts (for denominators)
+            journal_counts = df.groupby('Journal').size().reset_index(name='Journal_Total_Papers')
+            
+            # 2. Topic Stats
+            topic_stats = df.groupby(['Journal', 'Classification', 'Topic']).agg({
+                'Title': 'count',
+                'FWCI': 'mean',
+                'Citations': 'mean'
+            }).reset_index()
+            topic_stats = topic_stats.merge(journal_counts, on='Journal')
+            topic_stats['Proportion'] = (topic_stats['Title'] / topic_stats['Journal_Total_Papers']) * 100
+            topic_stats.rename(columns={'Title': 'Count', 'FWCI': 'Avg FWCI', 'Citations': 'Avg Citations'}, inplace=True)
+            
+            # 3. Journal Stats (Surgical vs Non)
+            class_stats = df.groupby(['Journal', 'Classification']).size().reset_index(name='Count')
+            class_stats = class_stats.merge(journal_counts, on='Journal')
+            class_stats['Proportion'] = (class_stats['Count'] / class_stats['Journal_Total_Papers']) * 100
+
+            # --- DASHBOARD UI ---
             
             st.divider()
             
-            # Create Tabs
-            tab_overview, tab_impact, tab_topics, tab_data = st.tabs([
-                "📊 Overview", 
-                "📉 Impact Metrics", 
-                "🧬 Topic Contribution", 
+            tab_overview, tab_topics, tab_data = st.tabs([
+                "📊 Journal Overview", 
+                "🧬 Detailed Topic Metrics", 
                 "📑 Raw Data"
             ])
             
-            surg_df = df[df['Classification'] == 'Surgical'].copy()
-            
             # --- TAB 1: OVERVIEW ---
             with tab_overview:
-                col1, col2, col3, col4 = st.columns(4)
-                n_total = len(df)
-                n_surg = len(surg_df)
-                pct_surg = (n_surg / n_total) * 100 if n_total > 0 else 0
-                avg_fwci = surg_df['FWCI'].mean() if not surg_df.empty else 0
+                st.subheader("Surgical vs Non-Surgical Output")
                 
-                col1.metric("Total Papers", n_total)
-                col2.metric("Surgical Papers", n_surg)
-                col3.metric("Surgical Yield", f"{pct_surg:.1f}%")
-                col4.metric("Avg FWCI (Surgical)", f"{avg_fwci:.2f}")
-                
-                st.subheader("Surgical Volume by Journal")
-                if not df.empty:
-                    chart_data = df.groupby(['Journal', 'Classification']).size().reset_index(name='Count')
-                    bar_chart = alt.Chart(chart_data).mark_bar().encode(
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("**Volume (Count)**")
+                    vol_chart = alt.Chart(class_stats).mark_bar().encode(
                         x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
                         y='Count',
                         color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
-                        tooltip=['Journal', 'Classification', 'Count']
+                        tooltip=['Journal', 'Classification', 'Count', alt.Tooltip('Proportion', format='.1f')]
                     ).properties(height=350)
-                    st.altair_chart(bar_chart, use_container_width=True)
+                    st.altair_chart(vol_chart, use_container_width=True)
 
-            # --- TAB 2: IMPACT METRICS ---
-            with tab_impact:
-                st.subheader("Citation Impact Analysis (Surgical Papers Only)")
+                with col2:
+                    st.markdown("**Proportion (%)**")
+                    prop_chart = alt.Chart(class_stats).mark_bar().encode(
+                        x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
+                        y=alt.Y('Proportion', title='Percentage of Output'),
+                        color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
+                        tooltip=['Journal', 'Classification', alt.Tooltip('Proportion', format='.1f')]
+                    ).properties(height=350)
+                    st.altair_chart(prop_chart, use_container_width=True)
+
+                st.markdown("### Surgical Content Summary")
+                # Filter topic stats for just surgical to show top topics
+                surg_topics = topic_stats[topic_stats['Classification'] == 'Surgical'].copy()
+                # Sort by Count desc
+                surg_topics = surg_topics.sort_values('Count', ascending=False)
                 
-                if surg_df.empty:
-                    st.info("No surgical papers found to analyze.")
-                else:
-                    col_a, col_b = st.columns(2)
-                    
-                    with col_a:
-                        st.markdown("**Average FWCI per Journal**")
-                        fwci_chart = alt.Chart(surg_df).mark_bar().encode(
-                            x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
-                            y=alt.Y('mean(FWCI)', title='Average FWCI'),
-                            color=alt.value('#ef4444'),
-                            tooltip=['Journal', 'mean(FWCI)', 'count()']
-                        ).properties(height=300)
-                        st.altair_chart(fwci_chart, use_container_width=True)
-                        
-                    with col_b:
-                        st.markdown("**Citation Counts vs FWCI** (Color = Journal)")
-                        scatter = alt.Chart(surg_df).mark_circle(size=60).encode(
-                            x=alt.X('FWCI', scale=alt.Scale(domain=(0, 10), clamp=True), title="FWCI (Capped at 10)"),
-                            y=alt.Y('Citations', scale=alt.Scale(type='symlog'), title="Citations (Log Scale)"),
-                            color='Journal',
-                            tooltip=['Title', 'Journal', 'FWCI', 'Citations']
-                        ).properties(height=300).interactive()
-                        st.altair_chart(scatter, use_container_width=True)
+                # Table for Journal Stats
+                st.dataframe(class_stats[['Journal', 'Classification', 'Count', 'Proportion']].sort_values(['Journal', 'Classification']), use_container_width=True)
 
-                    st.markdown("#### Journal Impact Statistics")
-                    # Group by Journal to show detailed stats
-                    stats = surg_df.groupby('Journal').agg({
-                        'Title': 'count',
-                        'FWCI': 'mean',
-                        'Citations': 'median'
-                    }).reset_index()
-                    stats.columns = ['Journal', 'Surgical Count', 'Avg FWCI', 'Median Citations']
-                    # Sort by Impact
-                    stats = stats.sort_values('Avg FWCI', ascending=False)
-                    st.dataframe(stats, use_container_width=True)
-
-            # --- TAB 3: TOPIC CONTRIBUTION ---
+            # --- TAB 2: DETAILED TOPIC METRICS ---
             with tab_topics:
-                st.subheader("Topic Contribution to Journals")
+                st.subheader("Topic Metrics per Journal")
+                st.markdown("Breakdown of every topic by journal and classification, showing contribution (%) and citation impact (FWCI).")
                 
-                if surg_df.empty:
-                    st.info("No data.")
-                else:
-                    # 1. Topic Impact (Bar Chart)
-                    st.markdown("**Top Surgical Topics by Impact (Avg FWCI)**")
-                    # Filter for topics with at least 3 papers to avoid noise
-                    topic_counts = surg_df['Topic'].value_counts()
-                    valid_topics = topic_counts[topic_counts >= 3].index
-                    filtered_topics = surg_df[surg_df['Topic'].isin(valid_topics)]
-                    
-                    topic_impact = filtered_topics.groupby('Topic')['FWCI'].mean().reset_index()
-                    topic_impact = topic_impact.sort_values('FWCI', ascending=False).head(15)
-                    
-                    impact_chart = alt.Chart(topic_impact).mark_bar().encode(
-                        x=alt.X('FWCI', title='Average FWCI'),
-                        y=alt.Y('Topic', sort='-x'),
-                        color=alt.value('#ef4444'),
-                        tooltip=['Topic', 'FWCI']
-                    ).properties(height=400)
-                    st.altair_chart(impact_chart, use_container_width=True)
+                # Filters
+                c1, c2 = st.columns(2)
+                selected_journals = c1.multiselect("Filter Journal", options=df['Journal'].unique(), default=df['Journal'].unique())
+                selected_class = c2.multiselect("Filter Classification", options=['Surgical', 'Non-Surgical'], default=['Surgical'])
+                
+                filtered_topics = topic_stats[
+                    (topic_stats['Journal'].isin(selected_journals)) & 
+                    (topic_stats['Classification'].isin(selected_class))
+                ]
+                
+                # Sort options
+                sort_col = st.radio("Sort By", ["Count", "Avg FWCI", "Proportion"], horizontal=True, index=0)
+                filtered_topics = filtered_topics.sort_values(sort_col, ascending=False)
+                
+                # Styling
+                st.dataframe(
+                    filtered_topics[[
+                        'Journal', 'Classification', 'Topic', 'Count', 'Proportion', 'Avg FWCI'
+                    ]].style.format({
+                        'Proportion': '{:.2f}%',
+                        'Avg FWCI': '{:.2f}'
+                    }),
+                    use_container_width=True,
+                    height=600
+                )
+                
+                st.download_button(
+                    "Download Topic Data (CSV)",
+                    filtered_topics.to_csv(index=False).encode('utf-8'),
+                    "topic_metrics.csv",
+                    "text/csv"
+                )
 
-                    st.divider()
-
-                    # 2. Topic Distribution (Heatmap/Stacked Bar)
-                    st.markdown("**Topic Contribution per Journal** (Top 10 Topics by Volume)")
-                    # Get top 10 topics overall
-                    top_vol_topics = surg_df['Topic'].value_counts().head(10).index.tolist()
-                    vol_df = surg_df[surg_df['Topic'].isin(top_vol_topics)]
-                    
-                    stacked_chart = alt.Chart(vol_df).mark_bar().encode(
-                        x=alt.X('count()', stack='normalize', axis=alt.Axis(format='%'), title='Proportion of Journal Output'),
-                        y=alt.Y('Journal'),
-                        color=alt.Color('Topic', scale=alt.Scale(scheme='tableau10')),
-                        tooltip=['Journal', 'Topic', 'count()']
-                    ).properties(height=350)
-                    st.altair_chart(stacked_chart, use_container_width=True)
-
-            # --- TAB 4: RAW DATA ---
+            # --- TAB 3: RAW DATA ---
             with tab_data:
                 st.dataframe(df, use_container_width=True)
                 csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("Download Full CSV", csv, "surgical_impact_data.csv", "text/csv")
+                st.download_button("Download Raw Data (CSV)", csv, "raw_data.csv", "text/csv")

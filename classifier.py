@@ -6,6 +6,16 @@ import time
 import altair as alt
 from datetime import datetime
 
+# --- DEFENSIVE IMPORT: MATPLOTLIB ---
+# This prevents the app from crashing if matplotlib is missing or broken.
+try:
+    import matplotlib
+    # Set backend to Agg to prevent GUI errors in headless environments
+    matplotlib.use('Agg')
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 # ==========================================
 # 1. CLASSIFIER LOGIC
 # ==========================================
@@ -418,24 +428,24 @@ if run_btn:
                     # Data Table
                     st.markdown("#### Data Table")
                     
-                    # --- ROBUST FALLBACK FOR STYLING ---
-                    try:
-                        # Attempt styler with background_gradient (Requires matplotlib)
-                        st.dataframe(
-                            pivot.style.format(fmt).background_gradient(
-                                cmap='Reds' if "Count" in metric_type else 'Greens', 
-                                axis=None
-                            ), 
-                            width="stretch"
-                        )
-                    except ImportError:
-                        # Fallback if matplotlib is missing or not reloaded yet
-                        st.warning("Heatmap styling disabled (matplotlib dependency missing/reloading). Displaying raw table.")
+                    if HAS_MATPLOTLIB:
+                        # Use styled table
+                        try:
+                            st.dataframe(
+                                pivot.style.format(fmt).background_gradient(
+                                    cmap='Reds' if "Count" in metric_type else 'Greens', 
+                                    axis=None
+                                ), 
+                                width="stretch"
+                            )
+                        except Exception as e:
+                            # Fallback if styling fails unpredictably
+                            st.warning("Styling unavailable (Internal Error). Showing plain table.")
+                            st.dataframe(pivot.style.format(fmt), width="stretch")
+                    else:
+                        # Use plain table if matplotlib missing
                         st.dataframe(pivot.style.format(fmt), width="stretch")
-                    except Exception as e:
-                        # Generic fallback
-                        st.error(f"Error displaying styled table: {e}")
-                        st.dataframe(pivot, width="stretch")
+
 
             # --- TAB 3: GEOGRAPHY ---
             with tab_geo:

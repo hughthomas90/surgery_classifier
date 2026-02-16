@@ -16,11 +16,11 @@ def classify_paper(title):
 
     title_lower = title.lower()
 
-    # --- A. NEGATIVE CONTEXT ---
+    # --- NEGATIVE CONTEXT ---
     medical_context_pattern = r'\b(stem cell|bone marrow|hematopoietic|fecal|fmt|microbiota|mitochondria|corneal|renal replacement)\b'
     has_medical_context = re.search(medical_context_pattern, title_lower)
 
-    # --- B. POSITIVE PATTERNS (Strict) ---
+    # --- POSITIVE PATTERNS (Strict) ---
     surgical_patterns = [
         (r'\bsurg(eries|ery|ical|eons?)\b', "Surgery (General)"),
         (r'\boperat(ions?|ive)\b', "Operative"), 
@@ -226,7 +226,6 @@ st.set_page_config(page_title="Surgical Impact Analyzer", layout="wide")
 st.title("🏥 Surgical Impact Analyzer")
 st.markdown("""
 **Goal:** Retrieve papers, isolate surgical content, and analyze **citation impact (FWCI)** and **output proportions**.
-**Features:** Corresponding Author extraction, Country analysis, and OpenAlex drill-down.
 """)
 
 if 'source_ids' not in st.session_state:
@@ -351,7 +350,7 @@ if run_btn:
                         color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
                         tooltip=['Journal', 'Classification', 'Count']
                     ).properties(height=350)
-                    st.altair_chart(vol_chart, use_container_width=True)
+                    st.altair_chart(vol_chart, width="stretch")
                 with col2:
                     st.markdown("**Proportion (%)**")
                     prop_chart = alt.Chart(class_stats).mark_bar().encode(
@@ -360,12 +359,11 @@ if run_btn:
                         color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
                         tooltip=['Journal', 'Classification', alt.Tooltip('Proportion', format='.1f')]
                     ).properties(height=350)
-                    st.altair_chart(prop_chart, use_container_width=True)
+                    st.altair_chart(prop_chart, width="stretch")
 
             # --- TAB 2: CROSSTABS ---
             with tab_crosstabs:
                 st.subheader("Interactive Crosstabs")
-                st.markdown("Generate custom tables for Volume, Impact (FWCI), and Citations.")
                 
                 # Filters
                 c1, c2, c3, c4 = st.columns(4)
@@ -380,7 +378,7 @@ if run_btn:
                 # Filter Data
                 subset_df = df[df['Classification'].isin(target_class)]
                 
-                # Filter out low volume rows if Topic/Inst/Country
+                # Filter out low volume rows
                 if row_dim in ['Topic', 'Institution', 'Country']:
                     counts = subset_df[row_dim].value_counts()
                     valid_rows = counts[counts >= min_docs].index
@@ -392,7 +390,6 @@ if run_btn:
                     # Generate Pivot
                     if "Count" in metric_type:
                         pivot = pd.crosstab(subset_df[row_dim], subset_df[col_dim])
-                        # Option for percentages
                         if st.checkbox("Show as Percentage of Column Total"):
                             pivot = pivot.div(pivot.sum(axis=0), axis=1).multiply(100)
                             fmt = "{:.2f}%"
@@ -406,9 +403,6 @@ if run_btn:
                         fmt = "{:.1f}"
 
                     # Heatmap Visualization
-                    st.markdown("#### Heatmap Visualization")
-                    
-                    # Convert pivot to long format for Altair
                     pivot_reset = pivot.reset_index().melt(id_vars=row_dim, var_name=col_dim, value_name='Value')
                     
                     heatmap = alt.Chart(pivot_reset).mark_rect().encode(
@@ -418,11 +412,10 @@ if run_btn:
                         tooltip=[row_dim, col_dim, alt.Tooltip('Value', format='.2f')]
                     ).properties(height=max(400, len(pivot)*15)).interactive()
                     
-                    st.altair_chart(heatmap, use_container_width=True)
+                    st.altair_chart(heatmap, width="stretch")
 
                     # Data Table
                     st.markdown("#### Data Table")
-                    # FIXED: use width='stretch' to suppress deprecation warning and prevent errors
                     st.dataframe(
                         pivot.style.format(fmt).background_gradient(
                             cmap='Reds' if "Count" in metric_type else 'Greens', 
@@ -430,7 +423,6 @@ if run_btn:
                         ), 
                         width="stretch"
                     )
-
 
             # --- TAB 3: GEOGRAPHY ---
             with tab_geo:
@@ -449,7 +441,7 @@ if run_btn:
                         color=alt.value('#ef4444'),
                         tooltip=['Country', 'Papers']
                     ).properties(height=500)
-                    st.altair_chart(geo_chart, use_container_width=True)
+                    st.altair_chart(geo_chart, width="stretch")
                     
                     st.subheader("Top Institutions (Surgical)")
                     inst_counts = surg_df['Institution'].value_counts().reset_index()

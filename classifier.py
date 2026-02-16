@@ -11,9 +11,6 @@ from datetime import datetime
 # ==========================================
 
 def classify_paper(title):
-    """
-    Classifies a paper as 'Surgical' or 'Non-Surgical'.
-    """
     if not isinstance(title, str):
         return "Non-Surgical", 0, "No Title"
 
@@ -87,7 +84,6 @@ def classify_paper(title):
         (r'\blymphadenectomy\b', "Lymphadenectomy"),
     ]
 
-    # --- C. EVALUATION ---
     matches = []
     for pattern, tag in surgical_patterns:
         if re.search(pattern, title_lower):
@@ -96,7 +92,6 @@ def classify_paper(title):
     if not matches:
         return "Non-Surgical", 0, "No keywords"
 
-    # --- D. CONFLICT RESOLUTION ---
     weak_tags = ["Transplant (Generic)", "Donor", "Recipient"]
     
     if has_medical_context:
@@ -114,7 +109,6 @@ def classify_paper(title):
 # ==========================================
 
 def search_journals(journal_names):
-    """Resolves journal string names to OpenAlex Source IDs."""
     found_journals = []
     base_url = "https://api.openalex.org/sources"
     
@@ -137,7 +131,6 @@ def search_journals(journal_names):
     return found_journals
 
 def get_total_count(source_ids, start_year, end_year):
-    """Checks total available papers without fetching them all."""
     base_url = "https://api.openalex.org/works"
     source_filter = "|".join(source_ids)
     filters = [
@@ -159,7 +152,6 @@ def get_total_count(source_ids, start_year, end_year):
     return 0
 
 def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
-    """Fetches papers using cursor pagination."""
     base_url = "https://api.openalex.org/works"
     source_filter = "|".join(source_ids)
     filters = [
@@ -167,11 +159,12 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
         f"publication_year:{start_year}-{end_year}",
         "type:article|review"
     ]
+    # Added authorships to select
     params = {
         "filter": ",".join(filters),
         "per-page": 200,
         "cursor": "*",
-        "select": "id,display_name,publication_year,primary_location,primary_topic,doi,fwci,cited_by_count"
+        "select": "id,display_name,publication_year,primary_location,primary_topic,doi,fwci,cited_by_count,authorships"
     }
 
     all_papers = []
@@ -192,7 +185,6 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
                 
             all_papers.extend(results)
             
-            # Update UI
             current_count = len(all_papers)
             status_text.text(f"Fetched {current_count} papers...")
             progress = min(current_count / max_limit, 1.0)
@@ -211,6 +203,27 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
     status_text.empty()
     return all_papers[:max_limit]
 
+def extract_corresponding_info(authorships):
+    """Parses authorships to find corresponding author institution and country."""
+    if not authorships:
+        return "Unknown", "Unknown"
+    
+    # 1. Try explicit corresponding flag
+    for auth in authorships:
+        if auth.get('is_corresponding'):
+            insts = auth.get('institutions', [])
+            if insts:
+                return insts[0].get('display_name', ''), insts[0].get('country_code', '')
+    
+    # 2. Fallback to first author
+    if authorships:
+        first = authorships[0]
+        insts = first.get('institutions', [])
+        if insts:
+            return insts[0].get('display_name', ''), insts[0].get('country_code', '')
+            
+    return "Unknown", "Unknown"
+
 # ==========================================
 # 3. STREAMLIT UI
 # ==========================================
@@ -220,9 +233,9 @@ st.set_page_config(page_title="Surgical Impact Analyzer", layout="wide")
 st.title("🏥 Surgical Impact Analyzer")
 st.markdown("""
 **Goal:** Retrieve papers, isolate surgical content, and analyze **citation impact (FWCI)** and **output proportions**.
+**Features:** Corresponding Author extraction, Country analysis, and OpenAlex drill-down.
 """)
 
-# --- STATE MANAGEMENT ---
 if 'source_ids' not in st.session_state:
     st.session_state.source_ids = []
 if 'total_count' not in st.session_state:
@@ -230,7 +243,6 @@ if 'total_count' not in st.session_state:
 if 'journal_names' not in st.session_state:
     st.session_state.journal_names = []
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.header("1. Define Journals")
     default_journals = "Annals of Surgery, JAMA Surgery, British Journal of Surgery"
@@ -242,7 +254,6 @@ with st.sidebar:
     
     st.divider()
     
-    # PRE-FLIGHT CHECK
     if st.button("Check Availability", type="secondary"):
         input_list = [x.strip() for x in journal_input.split(',') if x.strip()]
         with st.spinner("Checking OpenAlex..."):
@@ -273,8 +284,6 @@ with st.sidebar:
     
     run_btn = st.button("Fetch & Analyze", type="primary", disabled=not st.session_state.source_ids)
 
-
-# --- MAIN EXECUTION ---
 if run_btn:
     if not st.session_state.source_ids:
         st.warning("Please check availability first to identify journals.")
@@ -291,7 +300,6 @@ if run_btn:
         if not raw_papers:
             st.warning("No papers fetched.")
         else:
-            # CLASSIFY
             processed_data = []
             for p in raw_papers:
                 title = p.get('display_name', 'No Title')
@@ -304,6 +312,9 @@ if run_btn:
                 primary_topic = p.get('primary_topic') or {}
                 topic = primary_topic.get('display_name', 'Uncategorized')
                 
+                # Extract Institution/Country
+                inst, country = extract_corresponding_info(p.get('authorships', []))
+
                 processed_data.append({
                     "Title": title,
                     "Classification": cls,
@@ -311,6 +322,8 @@ if run_btn:
                     "Journal": source_name,
                     "Year": p.get('publication_year'),
                     "Topic": topic,
+                    "Institution": inst,
+                    "Country": country,
                     "DOI": p.get('doi'),
                     "OpenAlex ID": p.get('id'),
                     "FWCI": p.get('fwci', 0), 
@@ -319,40 +332,24 @@ if run_btn:
             
             df = pd.DataFrame(processed_data)
             
-            # --- AGGREGATION LOGIC FOR METRICS ---
-            
-            # 1. Journal Total Counts (for denominators)
+            # --- AGGREGATION LOGIC ---
             journal_counts = df.groupby('Journal').size().reset_index(name='Journal_Total_Papers')
             
-            # 2. Topic Stats
-            topic_stats = df.groupby(['Journal', 'Classification', 'Topic']).agg({
-                'Title': 'count',
-                'FWCI': 'mean',
-                'Citations': 'mean'
-            }).reset_index()
-            topic_stats = topic_stats.merge(journal_counts, on='Journal')
-            topic_stats['Proportion'] = (topic_stats['Title'] / topic_stats['Journal_Total_Papers']) * 100
-            topic_stats.rename(columns={'Title': 'Count', 'FWCI': 'Avg FWCI', 'Citations': 'Avg Citations'}, inplace=True)
-            
-            # 3. Journal Stats (Surgical vs Non)
             class_stats = df.groupby(['Journal', 'Classification']).size().reset_index(name='Count')
             class_stats = class_stats.merge(journal_counts, on='Journal')
             class_stats['Proportion'] = (class_stats['Count'] / class_stats['Journal_Total_Papers']) * 100
 
-            # --- DASHBOARD UI ---
-            
+            # --- TABS ---
             st.divider()
-            
-            tab_overview, tab_topics, tab_data = st.tabs([
-                "📊 Journal Overview", 
-                "🧬 Detailed Topic Metrics", 
-                "📑 Raw Data"
+            tab_overview, tab_geo, tab_data = st.tabs([
+                "📊 Overview", 
+                "🌍 Geography & Institutions", 
+                "📑 Raw Data & Links"
             ])
             
             # --- TAB 1: OVERVIEW ---
             with tab_overview:
                 st.subheader("Surgical vs Non-Surgical Output")
-                
                 col1, col2 = st.columns(2)
                 with col1:
                     st.markdown("**Volume (Count)**")
@@ -360,10 +357,9 @@ if run_btn:
                         x=alt.X('Journal', axis=alt.Axis(labelAngle=-45)),
                         y='Count',
                         color=alt.Color('Classification', scale=alt.Scale(domain=['Surgical', 'Non-Surgical'], range=['#ef4444', '#94a3b8'])),
-                        tooltip=['Journal', 'Classification', 'Count', alt.Tooltip('Proportion', format='.1f')]
+                        tooltip=['Journal', 'Classification', 'Count']
                     ).properties(height=350)
                     st.altair_chart(vol_chart, use_container_width=True)
-
                 with col2:
                     st.markdown("**Proportion (%)**")
                     prop_chart = alt.Chart(class_stats).mark_bar().encode(
@@ -374,55 +370,73 @@ if run_btn:
                     ).properties(height=350)
                     st.altair_chart(prop_chart, use_container_width=True)
 
-                st.markdown("### Surgical Content Summary")
-                # Filter topic stats for just surgical to show top topics
-                surg_topics = topic_stats[topic_stats['Classification'] == 'Surgical'].copy()
-                # Sort by Count desc
-                surg_topics = surg_topics.sort_values('Count', ascending=False)
-                
-                # Table for Journal Stats
-                st.dataframe(class_stats[['Journal', 'Classification', 'Count', 'Proportion']].sort_values(['Journal', 'Classification']), use_container_width=True)
+            # --- TAB 2: GEOGRAPHY ---
+            with tab_geo:
+                surg_df = df[df['Classification'] == 'Surgical']
+                if surg_df.empty:
+                    st.info("No surgical papers to analyze.")
+                else:
+                    st.subheader("Surgical Output by Country")
+                    geo_counts = surg_df['Country'].value_counts().reset_index()
+                    geo_counts.columns = ['Country', 'Papers']
+                    geo_counts = geo_counts[geo_counts['Country'] != 'Unknown'] # Filter unknowns
+                    
+                    geo_chart = alt.Chart(geo_counts.head(20)).mark_bar().encode(
+                        x=alt.X('Papers'),
+                        y=alt.Y('Country', sort='-x'),
+                        color=alt.value('#ef4444'),
+                        tooltip=['Country', 'Papers']
+                    ).properties(height=500)
+                    st.altair_chart(geo_chart, use_container_width=True)
+                    
+                    st.subheader("Top Institutions (Surgical)")
+                    inst_counts = surg_df['Institution'].value_counts().reset_index()
+                    inst_counts.columns = ['Institution', 'Papers']
+                    inst_counts = inst_counts[inst_counts['Institution'] != '']
+                    st.dataframe(inst_counts.head(20), use_container_width=True)
 
-            # --- TAB 2: DETAILED TOPIC METRICS ---
-            with tab_topics:
-                st.subheader("Topic Metrics per Journal")
-                st.markdown("Breakdown of every topic by journal and classification, showing contribution (%) and citation impact (FWCI).")
-                
-                # Filters
-                c1, c2 = st.columns(2)
-                selected_journals = c1.multiselect("Filter Journal", options=df['Journal'].unique(), default=df['Journal'].unique())
-                selected_class = c2.multiselect("Filter Classification", options=['Surgical', 'Non-Surgical'], default=['Surgical'])
-                
-                filtered_topics = topic_stats[
-                    (topic_stats['Journal'].isin(selected_journals)) & 
-                    (topic_stats['Classification'].isin(selected_class))
-                ]
-                
-                # Sort options
-                sort_col = st.radio("Sort By", ["Count", "Avg FWCI", "Proportion"], horizontal=True, index=0)
-                filtered_topics = filtered_topics.sort_values(sort_col, ascending=False)
-                
-                # Styling
-                st.dataframe(
-                    filtered_topics[[
-                        'Journal', 'Classification', 'Topic', 'Count', 'Proportion', 'Avg FWCI'
-                    ]].style.format({
-                        'Proportion': '{:.2f}%',
-                        'Avg FWCI': '{:.2f}'
-                    }),
-                    use_container_width=True,
-                    height=600
-                )
-                
-                st.download_button(
-                    "Download Topic Data (CSV)",
-                    filtered_topics.to_csv(index=False).encode('utf-8'),
-                    "topic_metrics.csv",
-                    "text/csv"
-                )
-
-            # --- TAB 3: RAW DATA ---
+            # --- TAB 3: DATA & LINKS ---
             with tab_data:
-                st.dataframe(df, use_container_width=True)
+                st.subheader("Interactive Data Table")
+                st.info("Select rows below to generate an OpenAlex analysis link.")
+                
+                # Make dataframe selectable
+                selection = st.dataframe(
+                    df,
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="multi-row"
+                )
+                
+                # Link Generator Logic
+                selected_indices = selection.selection.rows
+                if selected_indices:
+                    selected_ids = df.iloc[selected_indices]['OpenAlex ID'].tolist()
+                    clean_ids = [i.replace("https://openalex.org/", "") for i in selected_ids]
+                    
+                    st.markdown("#### 🔗 Analysis Actions")
+                    
+                    if len(clean_ids) > 150:
+                        st.warning(f"You selected {len(clean_ids)} papers. The link may be too long for some browsers.")
+                    
+                    # Create OpenAlex ID filter string
+                    id_filter = "|".join(clean_ids)
+                    oa_link = f"https://openalex.org/works?filter=ids.openalex:{id_filter}"
+                    
+                    st.markdown(f"""
+                    <a href="{oa_link}" target="_blank" style="
+                        display: inline-block;
+                        padding: 10px 20px;
+                        background-color: #ef4444;
+                        color: white;
+                        text-decoration: none;
+                        border-radius: 5px;
+                        font-weight: bold;">
+                        Analyze {len(clean_ids)} Selected Papers in OpenAlex ➜
+                    </a>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.caption("No papers selected. Click checkboxes in the table to generate an analysis link.")
+
                 csv = df.to_csv(index=False).encode('utf-8')
                 st.download_button("Download Raw Data (CSV)", csv, "raw_data.csv", "text/csv")

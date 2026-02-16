@@ -422,7 +422,14 @@ if run_btn:
 
                     # Data Table
                     st.markdown("#### Data Table")
-                    st.dataframe(pivot.style.format(fmt).background_gradient(cmap='Reds' if "Count" in metric_type else 'Greens', axis=None), use_container_width=True)
+                    # FIXED: use width='stretch' to suppress deprecation warning and prevent errors
+                    st.dataframe(
+                        pivot.style.format(fmt).background_gradient(
+                            cmap='Reds' if "Count" in metric_type else 'Greens', 
+                            axis=None
+                        ), 
+                        width="stretch"
+                    )
 
 
             # --- TAB 3: GEOGRAPHY ---
@@ -448,7 +455,7 @@ if run_btn:
                     inst_counts = surg_df['Institution'].value_counts().reset_index()
                     inst_counts.columns = ['Institution', 'Papers']
                     inst_counts = inst_counts[inst_counts['Institution'] != '']
-                    st.dataframe(inst_counts.head(20), use_container_width=True)
+                    st.dataframe(inst_counts.head(20), width="stretch")
 
             # --- TAB 4: DATA & LINKS ---
             with tab_data:
@@ -457,7 +464,7 @@ if run_btn:
                 
                 selection = st.dataframe(
                     df,
-                    use_container_width=True,
+                    width="stretch",
                     on_select="rerun",
                     selection_mode="multi-row"
                 )

@@ -159,7 +159,6 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
         f"publication_year:{start_year}-{end_year}",
         "type:article|review"
     ]
-    # Added authorships to select
     params = {
         "filter": ",".join(filters),
         "per-page": 200,
@@ -204,24 +203,18 @@ def fetch_papers_from_sources(source_ids, start_year, end_year, max_limit=1000):
     return all_papers[:max_limit]
 
 def extract_corresponding_info(authorships):
-    """Parses authorships to find corresponding author institution and country."""
     if not authorships:
         return "Unknown", "Unknown"
-    
-    # 1. Try explicit corresponding flag
     for auth in authorships:
         if auth.get('is_corresponding'):
             insts = auth.get('institutions', [])
             if insts:
                 return insts[0].get('display_name', ''), insts[0].get('country_code', '')
-    
-    # 2. Fallback to first author
     if authorships:
         first = authorships[0]
         insts = first.get('institutions', [])
         if insts:
             return insts[0].get('display_name', ''), insts[0].get('country_code', '')
-            
     return "Unknown", "Unknown"
 
 # ==========================================
@@ -312,7 +305,6 @@ if run_btn:
                 primary_topic = p.get('primary_topic') or {}
                 topic = primary_topic.get('display_name', 'Uncategorized')
                 
-                # Extract Institution/Country
                 inst, country = extract_corresponding_info(p.get('authorships', []))
 
                 processed_data.append({
@@ -339,12 +331,12 @@ if run_btn:
             class_stats = class_stats.merge(journal_counts, on='Journal')
             class_stats['Proportion'] = (class_stats['Count'] / class_stats['Journal_Total_Papers']) * 100
 
-            # --- TABS ---
             st.divider()
-            tab_overview, tab_geo, tab_data = st.tabs([
+            tab_overview, tab_crosstabs, tab_geo, tab_data = st.tabs([
                 "📊 Overview", 
-                "🌍 Geography & Institutions", 
-                "📑 Raw Data & Links"
+                "🧬 Crosstabs & Metrics", 
+                "🌍 Geography", 
+                "📑 Raw Data"
             ])
             
             # --- TAB 1: OVERVIEW ---
@@ -370,7 +362,70 @@ if run_btn:
                     ).properties(height=350)
                     st.altair_chart(prop_chart, use_container_width=True)
 
-            # --- TAB 2: GEOGRAPHY ---
+            # --- TAB 2: CROSSTABS ---
+            with tab_crosstabs:
+                st.subheader("Interactive Crosstabs")
+                st.markdown("Generate custom tables for Volume, Impact (FWCI), and Citations.")
+                
+                # Filters
+                c1, c2, c3, c4 = st.columns(4)
+                target_class = c1.multiselect("Classification", ["Surgical", "Non-Surgical"], default=["Surgical"])
+                min_docs = c2.slider("Min Papers per Topic", 1, 50, 3)
+                
+                row_dim = c3.selectbox("Rows", ["Topic", "Journal", "Country", "Institution"], index=0)
+                col_dim = c4.selectbox("Columns", ["Journal", "Classification", "Year"], index=0)
+                
+                metric_type = st.radio("Metric", ["Count (Volume)", "Avg FWCI (Impact)", "Avg Citations"], horizontal=True)
+
+                # Filter Data
+                subset_df = df[df['Classification'].isin(target_class)]
+                
+                # Filter out low volume rows if Topic/Inst/Country
+                if row_dim in ['Topic', 'Institution', 'Country']:
+                    counts = subset_df[row_dim].value_counts()
+                    valid_rows = counts[counts >= min_docs].index
+                    subset_df = subset_df[subset_df[row_dim].isin(valid_rows)]
+
+                if subset_df.empty:
+                    st.warning("No data matches current filters.")
+                else:
+                    # Generate Pivot
+                    if "Count" in metric_type:
+                        pivot = pd.crosstab(subset_df[row_dim], subset_df[col_dim])
+                        # Option for percentages
+                        if st.checkbox("Show as Percentage of Column Total"):
+                            pivot = pivot.div(pivot.sum(axis=0), axis=1).multiply(100)
+                            fmt = "{:.2f}%"
+                        else:
+                            fmt = "{:.0f}"
+                    elif "FWCI" in metric_type:
+                        pivot = pd.pivot_table(subset_df, values='FWCI', index=row_dim, columns=col_dim, aggfunc='mean')
+                        fmt = "{:.2f}"
+                    else: # Citations
+                        pivot = pd.pivot_table(subset_df, values='Citations', index=row_dim, columns=col_dim, aggfunc='mean')
+                        fmt = "{:.1f}"
+
+                    # Heatmap Visualization
+                    st.markdown("#### Heatmap Visualization")
+                    
+                    # Convert pivot to long format for Altair
+                    pivot_reset = pivot.reset_index().melt(id_vars=row_dim, var_name=col_dim, value_name='Value')
+                    
+                    heatmap = alt.Chart(pivot_reset).mark_rect().encode(
+                        x=alt.X(col_dim, axis=alt.Axis(labelAngle=-45)),
+                        y=alt.Y(row_dim, sort='-x' if "Count" in metric_type else '-color'),
+                        color=alt.Color('Value', title=metric_type, scale=alt.Scale(scheme='reds' if "Count" in metric_type else 'greens')),
+                        tooltip=[row_dim, col_dim, alt.Tooltip('Value', format='.2f')]
+                    ).properties(height=max(400, len(pivot)*15)).interactive()
+                    
+                    st.altair_chart(heatmap, use_container_width=True)
+
+                    # Data Table
+                    st.markdown("#### Data Table")
+                    st.dataframe(pivot.style.format(fmt).background_gradient(cmap='Reds' if "Count" in metric_type else 'Greens', axis=None), use_container_width=True)
+
+
+            # --- TAB 3: GEOGRAPHY ---
             with tab_geo:
                 surg_df = df[df['Classification'] == 'Surgical']
                 if surg_df.empty:
@@ -379,7 +434,7 @@ if run_btn:
                     st.subheader("Surgical Output by Country")
                     geo_counts = surg_df['Country'].value_counts().reset_index()
                     geo_counts.columns = ['Country', 'Papers']
-                    geo_counts = geo_counts[geo_counts['Country'] != 'Unknown'] # Filter unknowns
+                    geo_counts = geo_counts[geo_counts['Country'] != 'Unknown']
                     
                     geo_chart = alt.Chart(geo_counts.head(20)).mark_bar().encode(
                         x=alt.X('Papers'),
@@ -395,12 +450,11 @@ if run_btn:
                     inst_counts = inst_counts[inst_counts['Institution'] != '']
                     st.dataframe(inst_counts.head(20), use_container_width=True)
 
-            # --- TAB 3: DATA & LINKS ---
+            # --- TAB 4: DATA & LINKS ---
             with tab_data:
                 st.subheader("Interactive Data Table")
                 st.info("Select rows below to generate an OpenAlex analysis link.")
                 
-                # Make dataframe selectable
                 selection = st.dataframe(
                     df,
                     use_container_width=True,
@@ -408,7 +462,6 @@ if run_btn:
                     selection_mode="multi-row"
                 )
                 
-                # Link Generator Logic
                 selected_indices = selection.selection.rows
                 if selected_indices:
                     selected_ids = df.iloc[selected_indices]['OpenAlex ID'].tolist()
@@ -419,7 +472,6 @@ if run_btn:
                     if len(clean_ids) > 150:
                         st.warning(f"You selected {len(clean_ids)} papers. The link may be too long for some browsers.")
                     
-                    # Create OpenAlex ID filter string
                     id_filter = "|".join(clean_ids)
                     oa_link = f"https://openalex.org/works?filter=ids.openalex:{id_filter}"
                     

@@ -16,11 +16,11 @@ def classify_paper(title):
 
     title_lower = title.lower()
 
-    # --- NEGATIVE CONTEXT ---
+    # --- A. NEGATIVE CONTEXT ---
     medical_context_pattern = r'\b(stem cell|bone marrow|hematopoietic|fecal|fmt|microbiota|mitochondria|corneal|renal replacement)\b'
     has_medical_context = re.search(medical_context_pattern, title_lower)
 
-    # --- POSITIVE PATTERNS (Strict) ---
+    # --- B. POSITIVE PATTERNS (Strict) ---
     surgical_patterns = [
         (r'\bsurg(eries|ery|ical|eons?)\b', "Surgery (General)"),
         (r'\boperat(ions?|ive)\b', "Operative"), 
@@ -226,6 +226,7 @@ st.set_page_config(page_title="Surgical Impact Analyzer", layout="wide")
 st.title("🏥 Surgical Impact Analyzer")
 st.markdown("""
 **Goal:** Retrieve papers, isolate surgical content, and analyze **citation impact (FWCI)** and **output proportions**.
+**Features:** Corresponding Author extraction, Country analysis, and OpenAlex drill-down.
 """)
 
 if 'source_ids' not in st.session_state:
@@ -416,13 +417,25 @@ if run_btn:
 
                     # Data Table
                     st.markdown("#### Data Table")
-                    st.dataframe(
-                        pivot.style.format(fmt).background_gradient(
-                            cmap='Reds' if "Count" in metric_type else 'Greens', 
-                            axis=None
-                        ), 
-                        width="stretch"
-                    )
+                    
+                    # --- ROBUST FALLBACK FOR STYLING ---
+                    try:
+                        # Attempt styler with background_gradient (Requires matplotlib)
+                        st.dataframe(
+                            pivot.style.format(fmt).background_gradient(
+                                cmap='Reds' if "Count" in metric_type else 'Greens', 
+                                axis=None
+                            ), 
+                            width="stretch"
+                        )
+                    except ImportError:
+                        # Fallback if matplotlib is missing or not reloaded yet
+                        st.warning("Heatmap styling disabled (matplotlib dependency missing/reloading). Displaying raw table.")
+                        st.dataframe(pivot.style.format(fmt), width="stretch")
+                    except Exception as e:
+                        # Generic fallback
+                        st.error(f"Error displaying styled table: {e}")
+                        st.dataframe(pivot, width="stretch")
 
             # --- TAB 3: GEOGRAPHY ---
             with tab_geo:
